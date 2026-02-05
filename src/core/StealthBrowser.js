@@ -26,8 +26,8 @@ class StealthBrowser {
         }
     }
 
-    async init(headless = true) {
-        logger.info(`Initializing Advanced Stealth Browser (Headless: ${headless})`);
+    async init(headless = true, useSystemBrowser = false) {
+        logger.info(`Initializing Advanced Stealth Browser (Headless: ${headless}, System Browser: ${useSystemBrowser})`);
 
         const args = [
             '--no-sandbox',
@@ -42,26 +42,72 @@ class StealthBrowser {
             logger.info(`Using Proxy: ${this.proxy}`);
         }
 
-        this.browser = await puppeteer.launch({
+        const launchOptions = {
             headless: headless ? 'new' : false,
             args,
             defaultViewport: null,
             ignoreDefaultArgs: ['--enable-automation']
-        });
+        };
+
+        if (useSystemBrowser) {
+            const systemPath = this.findSystemBrowser();
+            if (systemPath) {
+                logger.info(`Detected System Browser: ${systemPath}`);
+                launchOptions.executablePath = systemPath;
+            } else {
+                logger.warn('System browser not found in common locations. Falling back to default Chromium.');
+            }
+        }
+
+        this.browser = await puppeteer.launch(launchOptions);
 
         return this.browser;
     }
 
-    async createPage() {
+    findSystemBrowser() {
+        const fs = require('fs');
+        const path = require('path');
+        const commonPaths = [
+            // Windows
+            'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+            'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+            path.join(process.env.LOCALAPPDATA || '', 'Google\\Chrome\\Application\\chrome.exe'),
+            'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+            'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
+            // macOS
+            '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+            '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+            // Linux
+            '/usr/bin/google-chrome',
+            '/usr/bin/chromium-browser',
+            '/usr/bin/chromium'
+        ];
+
+        for (const p of commonPaths) {
+            if (fs.existsSync(p)) return p;
+        }
+        return null;
+    }
+
+    async createPage(profileName = 'desktop') {
+        const devices = require('../../config/devices');
+        const profile = devices[profileName] || devices['desktop'];
+
         const page = await this.browser.newPage();
 
-        // Apply advanced stealth & fingerprinting masking
-        await FingerprintManager.applyStealth(page);
+        // Apply device emulation
+        logger.info(`Emulating Device: ${profileName}`);
+        await page.setUserAgent(profile.userAgent);
+        await page.setViewport(profile.viewport);
 
-        // Hide webdriver
-        await page.evaluateOnNewDocument(() => {
+        // Apply advanced stealth & fingerprinting masking with hardware profile
+        await FingerprintManager.applyStealth(page, profile.hardware);
+
+        // Mask webdriver and platform
+        await page.evaluateOnNewDocument((ua) => {
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-        });
+            Object.defineProperty(navigator, 'platform', { get: () => ua.includes('iPhone') ? 'iPhone' : 'Win32' });
+        }, profile.userAgent);
 
         return page;
     }

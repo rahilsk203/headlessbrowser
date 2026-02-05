@@ -3,8 +3,8 @@
  * Injects scripts to mask Canvas, WebGL, and other hardware fingerprints
  */
 class FingerprintManager {
-    static async applyStealth(page) {
-        await page.evaluateOnNewDocument(() => {
+    static async applyStealth(page, hardware = { cores: 8, memory: 8 }) {
+        await page.evaluateOnNewDocument((hw) => {
             // Mask Canvas Fingerprinting
             const originalGetImageData = CanvasRenderingContext2D.prototype.getImageData;
             CanvasRenderingContext2D.prototype.getImageData = function (x, y, w, h) {
@@ -24,11 +24,11 @@ class FingerprintManager {
             };
 
             // Mask Hardware Concurrency
-            Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+            Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => hw.cores });
 
             // Mask Memory
-            Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
-        });
+            Object.defineProperty(navigator, 'deviceMemory', { get: () => hw.memory });
+        }, hardware);
     }
 }
 
