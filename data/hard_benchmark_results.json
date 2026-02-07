@@ -1,0 +1,30 @@
+[
+  {
+    "query": "Compare iPhone 15 Pro vs Samsung S24 specs",
+    "target_url": "https://www.gsmarena.com/res.php3?sSearch=iPhone%2015%20Pro%20vs%20Samsung%20S24",
+    "duration": "151.4s",
+    "response_length": 16791,
+    "status": "✅ Success"
+  },
+  {
+    "query": "What is the SAR value of Sony Xperia 1 VI?",
+    "target_url": "https://www.gsmarena.com/res.php3?sSearch=Sony%20Xperia%201%20VI",
+    "duration": "105.6s",
+    "response_length": 21982,
+    "status": "✅ Success"
+  },
+  {
+    "query": "Current gold price per gram in USD and last 24h trend",
+    "target_url": "https://www.bing.com/search?q=Current%20gold%20price%20per%20gram%20in%20USD%20and%20last%2024h%20trend&setlang=en&cc=US&PC=U531",
+    "duration": "93.9s",
+    "response_length": 7528,
+    "status": "✅ Success"
+  },
+  {
+    "query": "Find the latest video from Marques Brownlee on YouTube and tell me what product he is talking about.",
+    "target_url": "https://www.youtube.com/results?search_query=Marques%20Brownlee",
+    "duration": "306.0s",
+    "response_length": 9429,
+    "status": "✅ Success"
+  }
+]

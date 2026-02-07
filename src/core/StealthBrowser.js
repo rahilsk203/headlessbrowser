@@ -34,7 +34,9 @@ class StealthBrowser {
             '--disable-setuid-sandbox',
             '--disable-blink-features=AutomationControlled',
             '--disable-infobars',
-            '--window-size=1920,1080'
+            '--window-size=1920,1080',
+            '--disable-features=IsolateOrigins,site-per-process',
+            '--font-render-hinting=none'
         ];
 
         if (this.proxy) {
@@ -46,7 +48,7 @@ class StealthBrowser {
             headless: headless ? 'new' : false,
             args,
             defaultViewport: null,
-            ignoreDefaultArgs: ['--enable-automation']
+            ignoreDefaultArgs: ['--enable-automation', '--use-mock-keychain']
         };
 
         if (useSystemBrowser) {
@@ -60,6 +62,19 @@ class StealthBrowser {
         }
 
         this.browser = await puppeteer.launch(launchOptions);
+
+        // Add periodic CDP property cleanup for all pages
+        this.browser.on('targetcreated', async (target) => {
+            const page = await target.page();
+            if (page) {
+                await page.evaluateOnNewDocument(() => {
+                    // Remove cdc_ variables from window
+                    for (const key in window) {
+                        if (key.includes('cdc_')) delete window[key];
+                    }
+                });
+            }
+        });
 
         return this.browser;
     }
@@ -98,6 +113,9 @@ class StealthBrowser {
         // Apply device emulation
         logger.info(`Emulating Device: ${profileName}`);
         await page.setUserAgent(profile.userAgent);
+        await page.setExtraHTTPHeaders({
+            'Accept-Language': 'en-US,en;q=0.9'
+        });
         await page.setViewport(profile.viewport);
 
         // Apply advanced stealth & fingerprinting masking with hardware profile
@@ -112,11 +130,65 @@ class StealthBrowser {
         return page;
     }
 
+    /**
+     * Load cookies from a JSON file and apply to page
+     */
+    async loadCookiesFromFile(page, filePath) {
+        const fs = require('fs');
+        try {
+            if (fs.existsSync(filePath)) {
+                const cookiesContent = fs.readFileSync(filePath, 'utf8');
+                const cookies = JSON.parse(cookiesContent);
+
+                if (Array.isArray(cookies)) {
+                    // Sanitize cookies (Puppeteer is strict)
+                    const sanitizedCookies = cookies.map(c => {
+                        const cookie = { ...c };
+                        // sameSite must be string or undefined
+                        if (cookie.sameSite === null) delete cookie.sameSite;
+                        // Puppeteer uses 'expires' instead of 'expirationDate' in some contexts, but setCookie accepts both.
+                        // However, some versions are picky about nulls.
+                        for (const key in cookie) {
+                            if (cookie[key] === null) delete cookie[key];
+                        }
+                        return cookie;
+                    });
+
+                    logger.info(`Loading ${sanitizedCookies.length} cookies from ${filePath}`);
+                    await page.setCookie(...sanitizedCookies);
+                    return true;
+                }
+            }
+        } catch (error) {
+            logger.error(`Failed to load cookies from ${filePath}: ${error.message}`);
+        }
+        return false;
+    }
+
+    /**
+     * Set cookies directly on the page
+     */
+    async setCookies(page, cookies) {
+        try {
+            await page.setCookie(...cookies);
+            logger.info(`✓ ${cookies.length} cookies applied manually.`);
+        } catch (e) {
+            logger.error(`Manual cookie application failed: ${e.message}`);
+        }
+    }
+
     async navigate(page, url) {
         logger.info(`Navigating to ${url}`);
         try {
             await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
             await this.handleSecurityChecks(page);
+
+            // Behavioral: Thinking delay + Random scrolling (Reading period)
+            const thinkingDelay = Math.random() * 2000 + 1500;
+            logger.info(`Thinking pause: ${thinkingDelay.toFixed(0)}ms...`);
+            await Humanoid.sleep(thinkingDelay);
+
+            await Humanoid.scrollRandomly(page);
         } catch (error) {
             logger.error(`Navigation failed for ${url}: ${error.message}`);
             throw error;

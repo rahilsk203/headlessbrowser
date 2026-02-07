@@ -40,10 +40,48 @@ class Extractor {
     }
 
     /**
+     * Get interactable elements (buttons, links) for AI decision making
+     */
+    static async getInteractables(page) {
+        return await page.evaluate(() => {
+            const interactables = [];
+
+            // Find buttons and interesting links
+            const elements = document.querySelectorAll('button, a, input[type="submit"], [role="button"]');
+
+            elements.forEach((el, index) => {
+                const text = el.innerText.trim();
+                const isVisible = el.offsetWidth > 0 && el.offsetHeight > 0;
+
+                // Filter for likely "action" elements
+                if (isVisible && text.length > 0 && text.length < 30) {
+                    interactables.push({
+                        typ: el.tagName.toLowerCase(),
+                        text: text,
+                        selector: getDefaultSelector(el), // We need a helper for this
+                        x: el.getBoundingClientRect().x + el.getBoundingClientRect().width / 2,
+                        y: el.getBoundingClientRect().y + el.getBoundingClientRect().height / 2
+                    });
+                }
+            });
+
+            // Helper to generate a simple selector
+            function getDefaultSelector(element) {
+                if (element.id) return `#${element.id}`;
+                if (element.className) return `.${element.className.split(' ').join('.')}`;
+                return element.tagName.toLowerCase();
+            }
+
+            return interactables.slice(0, 20); // Limit to top 20 to avoid token overload
+        });
+    }
+
+    /**
      * Deep Smart Heuristics to find any meaningful text content and lists
      */
     static async smartExtract(page) {
         logger.info('Running aggressive smart extraction...');
+        // ... (rest of function)
         await page.evaluate(() => {
             window.scrollTo(0, 800);
             return new Promise(r => setTimeout(r, 2000));
@@ -79,10 +117,8 @@ class Extractor {
                 })
                 .slice(0, 5); // Limit to top 5 for deep crawl
 
-            // 2. Headings as backup
-            results.headings = Array.from(document.querySelectorAll('h1, h2, h3'))
-                .map(h => h.innerText.trim())
-                .filter(t => t.length > 5);
+            results.links = results.results.map(r => r.url);
+            results.text = results.results.map(r => `${r.title}: ${r.parentText}`).join('\n\n');
 
             return results;
         });
@@ -109,6 +145,10 @@ class Extractor {
         const url = page.url();
 
         // Dispatch to appropriate extractor
+        if (url.includes('bing.com/search') || url.includes('google.com/search')) {
+            return await this.smartExtract(page);
+        }
+
         if (url.includes('youtube.com')) {
             const YouTubeExtractor = require('./extractors/YouTubeExtractor');
             return await YouTubeExtractor.extract(page);

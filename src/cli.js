@@ -26,6 +26,8 @@ program
     .option('--system', 'Use the system browser instead of bundled Chromium')
     .option('--headed', 'Run browser in headed (visible) mode')
     .option('--scroll', 'Execute a human-like scroll before other actions')
+    .option('--ai <query>', 'Use AI to derive plan, automate browser, and filter results')
+    .option('--clear-cache', 'Clear all cached results before starting')
     .allowUnknownOption() // Allow extra flags
     .allowExcessArguments(); // Allow positional args to prevent the error
 
@@ -35,19 +37,53 @@ program.parse(process.argv);
 const options = program.opts();
 const positionalArgs = program.args;
 
-// If no batch flag but we have positional args, treat lead positional as batch
-if (!options.batch && positionalArgs.length > 0) {
-    options.batch = positionalArgs.join(', ');
-    options.extract = true; // Auto-extract for positional batch
+// If no batch/url/search flag but we have positional args, treat lead positional as AI query
+if (!options.batch && !options.url && !options.search && !options.ai && positionalArgs.length > 0) {
+    options.ai = positionalArgs.join(' ');
 }
 
-if (!options.url && !options.search && !options.batch) {
-    logger.error('Error: You must provide either a URL (--url), a search query (--search), or a batch (--batch)');
+if (!options.url && !options.search && !options.batch && !options.ai) {
+    logger.error('Error: Provide URL (--url), search (--search), batch (--batch), or AI query (--ai)');
     program.help();
     process.exit(1);
 }
 
 async function runCli() {
+    // Mode 0: AI-Driven Automation
+    if (options.ai) {
+        const AIService = require('./utils/AIService');
+
+        if (options.clearCache) {
+            const { getInstance: getCacheManager } = require('./utils/CacheManager');
+            getCacheManager().clear();
+            logger.info("✓ Cache cleared.");
+        }
+
+        logger.info(`Entering AI Automation Mode: "${options.ai}"`);
+
+        try {
+            const result = await AIService.process(options.ai, {
+                device: options.device,
+                useSystem: !!options.system,
+                isHeadless: !options.headed
+            });
+
+            if (result.error) {
+                logger.error(`AI Mode failed: ${result.error}`);
+            } else {
+                // Save AI summary and plan
+                const platform = result.plan?.url.includes('search') ? 'search' : 'ai_intent';
+                const filename = `data/ai_output.json`;
+                Extractor.saveToFile(result, filename);
+                logger.info(`✓ AI Automation flow complete.`);
+            }
+            return;
+        } catch (err) {
+            logger.error(`Critical AI failure: ${err.message}`);
+            process.exit(1);
+        }
+    }
+
     // Mode 1: Direct URL Scraping with Interactions
     if (options.url && (options.click || options.type || options.upload || options.wait || options.screenshot || options.extract)) {
         logger.info(`Direct URL Scraping Mode: ${options.url}`);
@@ -143,9 +179,13 @@ async function runCli() {
             const outputPath = 'data/cli_extract.json';
             Extractor.saveToFile(data, outputPath);
             console.log('\n--- Extracted Headlines ---');
-            data.headings.slice(0, 10).forEach((h, i) => {
-                if (h) console.log(`${i + 1}. ${h}`);
-            });
+            if (data.results && data.results.length > 0) {
+                data.results.slice(0, 10).forEach((r, i) => {
+                    if (r && r.title) console.log(`${i + 1}. ${r.title}`);
+                });
+            } else {
+                console.log('No results extracted.');
+            }
             console.log(`\nFull data saved to: ${outputPath}\n`);
         }
 

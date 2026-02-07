@@ -8,7 +8,11 @@ class AccuWeatherExtractor {
 
             // AccuWeather Current Conditions (New Selectors)
             const curCondBody = document.querySelector('.cur-con-weather-card__body');
-            let current = {};
+            let current = {
+                temp: '',
+                condition: '',
+                realFeel: ''
+            };
 
             if (curCondBody) {
                 const tempEl = curCondBody.querySelector('.temp');
@@ -47,21 +51,35 @@ class AccuWeatherExtractor {
                 .find(el => el.innerText.toLowerCase().includes('air quality'));
             let airQuality = aqEl ? aqEl.innerText.trim() : '';
 
-            const textContent = `Current Weather:\nTemp: ${current.temp}\nCondition: ${current.condition}\nRealFeel: ${current.realFeel}\n\nDetails:\n${Object.entries(details).map(([k, v]) => `${k}: ${v}`).join('\n')}\n\nAir Quality: ${airQuality}`;
+            // Check if we are on a search results page (ambiguous location)
+            const searchLinks = Array.from(document.querySelectorAll('.locations-list a, .search-results a, .results-list a'));
+            const isSearchPage = searchLinks.length > 0 && !curCondBody;
+
+            let extractedLinks = [];
+            if (isSearchPage) {
+                extractedLinks = searchLinks.map(a => a.href).slice(0, 5);
+            } else {
+                extractedLinks = Array.from(document.querySelectorAll('.card-header a')).map(a => a.href).slice(0, 5);
+            }
+
+            const textContent = isSearchPage
+                ? `Multiple locations found. Please select one:\n${searchLinks.map(a => a.innerText.trim()).join('\n')}`
+                : `Current Weather:\nTemp: ${current.temp}\nCondition: ${current.condition}\nRealFeel: ${current.realFeel}\n\nDetails:\n${Object.entries(details).map(([k, v]) => `${k}: ${v}`).join('\n')}\n\nAir Quality: ${airQuality}`;
 
             return {
                 url,
                 title,
-                text: `AccuWeather Forecast:\n\n${textContent}`,
+                text: `AccuWeather ${isSearchPage ? 'Locations' : 'Forecast'}:\n\n${textContent}`,
                 wordCount: textContent.split(/\s+/).length,
                 metadata: {
                     platform: 'accuweather',
-                    type: 'weather',
+                    type: isSearchPage ? 'location_list' : 'weather',
                     current,
                     details,
                     airQuality
                 },
-                links: Array.from(document.querySelectorAll('.card-header a')).map(a => a.href).slice(0, 5)
+                links: extractedLinks,
+                results: isSearchPage ? searchLinks.map(a => ({ title: a.innerText.trim(), url: a.href, score: 0 })) : []
             };
         });
     }

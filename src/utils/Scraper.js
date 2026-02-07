@@ -1,5 +1,7 @@
 const StealthBrowser = require('../core/StealthBrowser');
 const Extractor = require('./Extractor');
+const Humanoid = require('./Humanoid');
+const CookieManager = require('./CookieManager');
 const logger = require('./Logger');
 
 class Scraper {
@@ -28,10 +30,18 @@ class Scraper {
             await browser.init(isHeadless, useSystem);
             const page = await browser.createPage(device);
 
+            // Auto-load cookies (Rotated)
+            const cookiePath = CookieManager.getInstance().getNextCookiePath();
+            if (cookiePath) await browser.loadCookiesFromFile(page, cookiePath);
+
             // Navigate to URL
             logger.info(`Navigating to: ${url}`);
             await browser.navigate(page, url);
             logger.info('✓ Page loaded successfully');
+
+            // Simulate human landing: Random mouse movement
+            await Humanoid.bezierMove(page, Math.random() * 800 + 100, Math.random() * 600 + 100);
+            await Humanoid.sleep(Math.random() * 1000 + 500);
 
             // 0. Popup Killer (Generic Heuristic)
             // Try to find and click common "Close" buttons for modals/overlays
@@ -82,29 +92,34 @@ class Scraper {
                 }
             }
 
-            // 2. Type Interaction
+            // 2. Type Interaction (Humanized)
             if (type) {
                 // Format: "selector:text"
                 const [selector, text] = type.split(':');
                 if (selector && text) {
                     logger.info(`Typing into: ${selector}`);
                     await page.waitForSelector(selector, { timeout: 10000 });
-                    await page.type(selector, text, { delay: 100 });
+                    await Humanoid.humanType(page, selector, text);
                     logger.info('✓ Type interaction complete');
                 }
             }
 
-            // 3. Click Interaction (e.g. Submit/Send)
+            // 3. Click Interaction (Humanized)
             if (click) {
                 logger.info(`Clicking element: ${click}`);
                 try {
                     await page.waitForSelector(click, { timeout: 5000 });
-                    await page.click(click);
+                    const rect = await page.$eval(click, el => {
+                        const { x, y, width, height } = el.getBoundingClientRect();
+                        return { x, y, width, height };
+                    });
+                    await Humanoid.bezierMove(page, rect.x + rect.width / 2, rect.y + rect.height / 2);
+                    await page.mouse.click(rect.x + rect.width / 2, rect.y + rect.height / 2);
                     logger.info('✓ Click interaction complete');
                 } catch (e) {
                     logger.warn(`Click failed (selector ${click} not found), trying fallback...`);
                 }
-                await new Promise(r => setTimeout(r, 2000));
+                await Humanoid.sleep(Math.random() * 1000 + 1000);
             }
 
             // 4. Key Press (e.g. Enter to submit)
@@ -153,30 +168,103 @@ class Scraper {
     }
 
     /**
-     * Scrape multiple URLs in sequence
+     * Advanced Scraper supporting a list of sequential interactions
+     * Used by AI Service to execute complex plans
      */
-    static async scrapeMultipleUrls(urls, options = {}) {
-        const results = [];
+    static async scrapeStore(options = {}) {
+        const {
+            url,
+            interactions = [],
+            device = 'desktop',
+            extract = true,
+            useSystem = false,
+            isHeadless = true
+        } = options;
 
-        for (const url of urls) {
-            try {
-                logger.info(`\n--- Scraping ${url} ---`);
-                const result = await this.scrapeUrl(url, options);
-                results.push(result);
+        const browser = new StealthBrowser();
+        try {
+            await browser.init(isHeadless, useSystem);
+            const page = await browser.createPage(device);
 
-                // Delay between requests
-                await new Promise(r => setTimeout(r, 3000));
-            } catch (err) {
-                logger.error(`Failed to scrape ${url}: ${err.message}`);
-                results.push({
-                    url,
-                    error: err.message,
-                    timestamp: new Date().toISOString()
-                });
+            // Auto-load cookies (Rotated)
+            const cookiePath = CookieManager.getInstance().getNextCookiePath();
+            if (cookiePath) await browser.loadCookiesFromFile(page, cookiePath);
+
+            await browser.navigate(page, url);
+
+            // Simulate human landing
+            await Humanoid.bezierMove(page, Math.random() * 800 + 100, Math.random() * 600 + 100);
+            await Humanoid.sleep(Math.random() * 1000 + 500);
+
+            // Execute list of actions
+            for (const action of interactions) {
+                const { type, selector, value } = action;
+                logger.info(`AI Action: ${type} on ${selector || 'page'}`);
+
+                try {
+                    switch (type) {
+                        case 'click':
+                            await page.waitForSelector(selector, { timeout: 10000 });
+                            const rect = await page.$eval(selector, el => {
+                                const { x, y, width, height } = el.getBoundingClientRect();
+                                // Return absolute coordinates with scroll logic? 
+                                // Puppeteer handles this relative to viewport usually.
+                                return { x, y, width, height };
+                            });
+                            // Initial Human movement
+                            await Humanoid.bezierMove(page, rect.x + rect.width / 2, rect.y + rect.height / 2);
+                            await new Promise(r => setTimeout(r, 500));
+                            await page.click(selector); // Use standard click for selector safety
+                            break;
+
+                        case 'click_coordinates':
+                            if (action.x && action.y) {
+                                logger.info(`Clicking at coordinates: ${action.x}, ${action.y}`);
+                                await Humanoid.bezierMove(page, action.x, action.y);
+                                await new Promise(r => setTimeout(r, 500));
+                                await page.mouse.click(action.x, action.y);
+                            }
+                            break;
+
+                        case 'type':
+                            await page.waitForSelector(selector, { timeout: 10000 });
+                            await Humanoid.humanType(page, selector, value || '');
+                            break;
+                        case 'scroll':
+                            await page.evaluate(() => window.scrollBy(0, 500));
+                            break;
+                        case 'wait':
+                            if (selector) {
+                                await page.waitForSelector(selector, { timeout: value || 10000 });
+                            } else {
+                                await new Promise(r => setTimeout(r, value || 2000));
+                            }
+                            break;
+                    }
+                    await new Promise(r => setTimeout(r, 1000)); // Delay between actions
+                } catch (e) {
+                    logger.warn(`Action ${type} failed: ${e.message}`);
+                }
             }
-        }
 
-        return results;
+            let result = {
+                url: page.url(),
+                title: await page.title(),
+                timestamp: new Date().toISOString()
+            };
+
+            if (extract) {
+                const extractedData = await Extractor.extractPageContent(page);
+                result = { ...result, ...extractedData };
+            }
+
+            await browser.close();
+            return result;
+        } catch (error) {
+            logger.error(`ScrapeStore failed: ${error.message}`);
+            await browser.close();
+            return null;
+        }
     }
 }
 

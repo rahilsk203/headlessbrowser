@@ -1,0 +1,26 @@
+[
+  {
+    "query": "Samsung S24 Ultra specs",
+    "platform": "gsmarena",
+    "duration": "135.1s",
+    "success": true
+  },
+  {
+    "query": "Weather in London",
+    "platform": "accuweather",
+    "duration": "46.7s",
+    "success": true
+  },
+  {
+    "query": "Python merge dictionaries",
+    "platform": "unknown",
+    "duration": "4.6s",
+    "success": false
+  },
+  {
+    "query": "Latest tech news",
+    "platform": "generic",
+    "duration": "495.1s",
+    "success": true
+  }
+]

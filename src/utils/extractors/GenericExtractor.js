@@ -5,7 +5,7 @@ class GenericExtractor {
         return await page.evaluate(() => {
             const isVisible = (el) => {
                 const style = window.getComputedStyle(el);
-                return style && style.display !== 'none' && style.visibility !== 'hidden';
+                return style && style.display !== 'none' && style.visibility !== 'hidden' && el.offsetWidth > 0;
             };
 
             const selectors = [
@@ -30,6 +30,20 @@ class GenericExtractor {
                     .join('\n');
             }
 
+            // Extract Interactable Elements (Buttons, Inputs)
+            const interactables = [];
+            document.querySelectorAll('button, input[type="submit"], [role="button"], a.btn, .button').forEach(el => {
+                if (isVisible(el) && el.innerText.trim().length > 0 && el.innerText.trim().length < 30) {
+                    interactables.push({
+                        text: el.innerText.trim(),
+                        selector: el.id ? `#${el.id}` : (el.className ? `.${el.className.split(' ').join('.')}` : el.tagName.toLowerCase()),
+                        x: el.getBoundingClientRect().x,
+                        y: el.getBoundingClientRect().y,
+                        type: el.tagName.toLowerCase()
+                    });
+                }
+            });
+
             return {
                 url: window.location.href,
                 title: document.title,
@@ -39,7 +53,8 @@ class GenericExtractor {
                     platform: 'generic',
                     type: 'webpage'
                 },
-                links: Array.from(document.querySelectorAll('a')).map(a => a.href).slice(0, 10)
+                links: Array.from(document.querySelectorAll('a')).map(a => a.href).slice(0, 10),
+                interactables: interactables.slice(0, 10) // Top 10 buttons
             };
         });
     }
