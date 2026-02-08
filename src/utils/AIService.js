@@ -112,7 +112,13 @@ If the data is insufficient, state what is missing.
         // REMOVED: directNav fast-path (AI now handles this in planPrompt)
 
         // Phase 1: Determine Initial Action Plan
-        this.ai.useThinking = false; // Fast plan
+        // Express Planning: Use thinking only for complex queries to save latency
+        const complexTerms = ['specs', 'compare', 'research', 'latest', 'detailed', 'report', 'analyze', 'why', 'how'];
+        const isComplex = complexTerms.some(term => query.toLowerCase().includes(term)) || query.length > 50;
+
+        this.ai.useThinking = isComplex;
+        logger.info(`Planning Mode: ${isComplex ? 'Elite (Thinking)' : 'Express'}`);
+
         // Use default search strategy fallback
         const defaultSearchUrl = this.searchStrategy.getSearchUrl(query);
 
@@ -148,7 +154,8 @@ Return JSON:
   "reasoning": "why did you choose this tool/URL?"
 }`.trim();
 
-        const planResp = await this.ai.chat(planPrompt, false);
+        const planResp = await this.ai.chat(planPrompt, true); // Use useThinking=true for better plan.
+        logger.info(`AI Planning Response [Thinking Mode]: ${planResp.substring(0, 500)}...`);
         let plan = this.parseJson(planResp);
 
         if (plan && plan.action === 'answer' && plan.answer) {
@@ -233,8 +240,12 @@ ${rawData.interactables.map((el, i) => `${i + 1}. [${el.type}] "${el.text}" (Sel
                 const decisionPrompt = `
 User Query: "${query}"
 Review the Current Page Content below. 
-Do we have enough information to answer the query?
-If NO, decide the next step (Deep Dive URL or Click Interaction).
+Do we have enough information to provide a COMPREHENSIVE and HIGH-ACCURACY answer?
+
+CRITICAL ACCURACY CHECK:
+1. Is the data TRUNCATED? (Look for "...", "Read More", or cut-off sentences).
+2. Are specific technical metrics missing? (e.g., likes, comments).
+3. Is this just a landing page or search result?
 
 SEARCH QUALITY: ${qualityAssessment.recommendation}
 ${rawData.isBlocked ? 'WARNING: Web searching is currently BLOCKED by a CAPTCHA. If the user provided a direct URL in their query, use "deep_dive" to visit it immediately.' : ''}
@@ -244,20 +255,29 @@ TOP RESULTS:
 ${(rawData.results || []).slice(0, 5).map(r => `- "${r.title}" (${r.score}/100) -> ${r.url}`).join('\n')}
 
 RAW CONTENT SNIPPET:
-${rawData.text ? rawData.text.substring(0, 500) : "No text content"}
+${rawData.text ? rawData.text.substring(0, 800) : "No text content"}
 
 DECISION RULES:
-1. If data is sufficient, set "action": "answer".
-2. If search results are present, pick the best URL to "deep_dive". 
-3. If search is blocked (see WARNING) and the user provided a specific site URL, "deep_dive" to that URL instead.
-4. If you see a "Load More", "Next", or relevant button in INTERACTABLES that might reveal the data, pick "action": "click" and provide the "selector".
+1. "action": "answer" - ONLY if data is perfect and complete. NO TRUNCATION ALLOWED.
+2. "action": "click" - If content is cut off and an expander exists. 
+   - REQUIREMENT: Use a valid CSS SELECTOR (e.g., "#expand", "button.more"). DO NOT USE PLAIN TEXT.
+3. "action": "hover" - If data is hidden behind a mouse-over effect or tooltip.
+4. "action": "scroll_to" - If the target data is likely at the bottom of the page or in a specific section that triggers lazy-loading ("running data").
+5. "action": "deep_dive" - Navigate to a NEW URL. 
+   - ANTI-LOOP RULE: Do NOT "deep_dive" to the current URL (${rawData.url}) unless you just clicked something and you need to reload a specific sub-state.
+
+COMMON SITE HINTS:
+- YouTube: "#expand", "tp-yt-paper-button#more", "#expand-user-content"
+- GSMArena: "a.link-network-detail", "scroll_to" for full table
+- GitHub: "a.v-align-middle", "hover" on commit messages
+- Universal Expanders: "button:has-text('More')", "a[aria-label*='read']", ".show-more"
 
 Return JSON:
 {
-  "action": "answer" | "deep_dive" | "click",
-  "reasoning": "why?",
+  "action": "answer" | "deep_dive" | "click" | "hover" | "scroll_to",
+  "reasoning": "What exactly is missing and why is this specific 'touch' (interaction) needed for running data?",
   "target_url": "url if deep_dive",
-  "selector": "selector if click"
+  "selector": "CSS selector if click/hover/scroll_to"
 }`;
 
                 const decision = await this.ai.chat(decisionPrompt, true);
@@ -281,16 +301,18 @@ Return JSON:
                                 ...deepData,
                                 originalSearch: rawData
                             };
-                            // Reset loop for new page? No, continue to evaluate logic.
                         }
-                    } else if (plan.action === 'click' && plan.selector) {
-                        logger.info(`Clicking element: ${plan.selector}...`);
-                        // Perform click on the CURRENT url
+                    } else if (['click', 'hover', 'scroll_to'].includes(plan.action) && plan.selector) {
+                        logger.info(`Interacting (${plan.action}) with element: ${plan.selector}...`);
+                        // Perform interaction on the CURRENT url
                         const deepData = await Scraper.scrapeStore({
                             ...options,
                             url: rawData.url,
                             extract: true,
-                            interactions: [{ type: 'click', selector: plan.selector }, { type: 'wait', value: 3000 }]
+                            interactions: [
+                                { type: plan.action, selector: plan.selector },
+                                { type: 'wait', value: 5000 } // Wait for UI update
+                            ]
                         });
                         if (deepData) {
                             rawData = {
@@ -339,14 +361,29 @@ Use markdown tables or lists for readability.
     }
 
     parseJson(str) {
+        if (!str) return null;
         try {
-            const first = str.indexOf('{');
-            const last = str.lastIndexOf('}');
-            if (first === -1 || last === -1) return null;
-            return JSON.parse(str.substring(first, last + 1));
+            // Try direct parse first
+            return JSON.parse(str);
         } catch (e) {
-            return null;
+            // Try to find the last occurrence of a JSON-like block
+            // Often when thinking is enabled, the model puts the JSON at the end
+            try {
+                const matches = str.match(/\{[\s\S]*\}/g);
+                if (matches) {
+                    // Try matches from last to first
+                    for (let i = matches.length - 1; i >= 0; i--) {
+                        try {
+                            const candidate = matches[i];
+                            return JSON.parse(candidate);
+                        } catch (err) { continue; }
+                    }
+                }
+            } catch (err) {
+                return null;
+            }
         }
+        return null;
     }
 }
 

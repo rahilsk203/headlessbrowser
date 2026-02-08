@@ -64,29 +64,107 @@ class YouTubeExtractor {
         if (url.includes('youtube.com/watch')) {
             return await page.evaluate(() => {
                 const url = window.location.href;
+                // Primary Strategy: Extract from ytInitialData (The most robust way)
+                const getInitialData = () => {
+                    try {
+                        const scripts = Array.from(document.querySelectorAll('script'));
+                        const dataScript = scripts.find(s => s.textContent.includes('var ytInitialData =') || s.textContent.includes('window["ytInitialData"] ='));
+                        if (dataScript) {
+                            const jsonStr = dataScript.textContent.split(/var ytInitialData = |window\["ytInitialData"\] = /)[1].split(';')[0];
+                            return JSON.parse(jsonStr);
+                        }
+                    } catch (e) { return null; }
+                };
+
+                const ytData = getInitialData();
+
+                if (ytData && ytData.contents) {
+                    try {
+                        const videoPrimary = ytData.contents.twoColumnWatchNextResults?.results?.results?.contents?.[0]?.videoPrimaryInfoRenderer;
+                        const videoSecondary = ytData.contents.twoColumnWatchNextResults?.results?.results?.contents?.[1]?.videoSecondaryInfoRenderer;
+
+                        if (videoPrimary || videoSecondary) {
+                            const title = videoPrimary?.title?.runs?.map(r => r.text).join('') || document.title;
+                            const description = videoSecondary?.attributedDescription?.content ||
+                                videoSecondary?.description?.runs?.map(r => r.text).join('') || '';
+                            const channel = videoSecondary?.owner?.videoOwnerRenderer?.title?.runs?.[0]?.text || '';
+                            const viewCount = videoPrimary?.viewCount?.videoViewCountRenderer?.viewCount?.simpleText || '';
+
+                            // If we got high-quality data, return it
+                            if (title && description) {
+                                return {
+                                    title,
+                                    description,
+                                    channel,
+                                    metadata: {
+                                        platform: 'youtube',
+                                        type: 'video',
+                                        views: viewCount,
+                                        description: description,
+                                        channel: channel
+                                    }
+                                };
+                            }
+                        }
+                    } catch (e) { /* fallback to DOM */ }
+                }
+
+                // Fallback: DOM Extraction (Keep existing logic as backup)
                 const getMetaContent = (name) => {
                     const meta = document.querySelector(`meta[name="${name}"], meta[property="${name}"]`);
                     return meta?.content || '';
                 };
 
-                const videoTitle = document.querySelector('h1.ytd-watch-metadata yt-formatted-string, h1.title')?.innerText?.trim() ||
+                const videoTitle = document.querySelector('h1.ytd-watch-metadata yt-formatted-string, h1.title, #title h1')?.innerText?.trim() ||
                     getMetaContent('title') ||
                     document.title.replace(' - YouTube', '');
 
-                const description = document.querySelector('#description-inline-expander yt-formatted-string, #description')?.innerText?.trim() ||
-                    getMetaContent('description');
+                // Advanced Description Extraction (Handles truncated and expanded states)
+                const getDescription = () => {
+                    const selectors = [
+                        '#description-text span',
+                        'yt-attributed-string#description',
+                        '#description-inline-expander yt-formatted-string',
+                        '#description-text',
+                        '#description'
+                    ];
 
-                const channel = document.querySelector('ytd-channel-name a, #channel-name a, #owner-name a')?.innerText?.trim() ||
+                    for (const selector of selectors) {
+                        const els = document.querySelectorAll(selector);
+                        if (els.length > 0) {
+                            const text = Array.from(els).map(el => el.innerText || el.textContent).join('\n').trim();
+                            if (text && !text.endsWith('...')) return text; // Found likely full text
+                        }
+                    }
+
+                    // Fallback to first available or meta
+                    const firstEl = document.querySelector(selectors.join(', '));
+                    return firstEl?.innerText?.trim() || firstEl?.textContent?.trim() || getMetaContent('description');
+                };
+
+                const description = getDescription();
+
+                const channel = document.querySelector('ytd-channel-name a, #channel-name a, #owner-name a, #upload-info #channel-name a')?.innerText?.trim() ||
                     getMetaContent('author');
 
-                const views = document.querySelector('.view-count, #info-text')?.innerText?.trim() || '';
+                const views = document.querySelector('.view-count, #info-text, #metadata-line span:first-child')?.innerText?.trim() || '';
 
-                const likes = document.querySelector('#segmented-like-button button, ytd-toggle-button-renderer')?.getAttribute('aria-label') || '';
+                const likeEl = document.querySelector('#segmented-like-button button, ytd-toggle-button-renderer button, button[aria-label*="like"]');
+                let likes = likeEl?.getAttribute('aria-label') || likeEl?.innerText || '';
+
+                // If it's the aria-label "like this video along with 1,234 other people", try to extract just the number
+                if (likes && likes.toLowerCase().includes('like')) {
+                    const match = likes.match(/[\d,.]+/);
+                    if (match) likes = match[0];
+                }
+
+                const commentEl = document.querySelector('ytd-comments-header-renderer #count, ytd-item-section-renderer #count');
+                let comments = commentEl?.innerText?.trim() || '';
 
                 return {
                     url,
                     title: videoTitle,
-                    text: `${videoTitle}\n\nChannel: ${channel}\n${views}\n${likes}\n\nDescription:\n${description}`,
+                    text: `${videoTitle}\n\nChannel: ${channel}\n${views}\nLikes: ${likes}\nComments: ${comments}\n\nDescription:\n${description}`,
                     wordCount: description.split(/\s+/).length,
                     metadata: {
                         platform: 'youtube',
@@ -94,6 +172,7 @@ class YouTubeExtractor {
                         channel,
                         views,
                         likes,
+                        comments,
                         description: description.substring(0, 500)
                     },
                     links: Array.from(document.querySelectorAll('a')).map(a => a.href).slice(0, 10)

@@ -43,6 +43,9 @@ class Scraper {
             await Humanoid.bezierMove(page, Math.random() * 800 + 100, Math.random() * 600 + 100);
             await Humanoid.sleep(Math.random() * 1000 + 500);
 
+            // 0. Universal Cookie & Consent Handler
+            await Scraper.handleCookieConsents(page);
+
             // 0. Popup Killer (Generic Heuristic)
             // Try to find and click common "Close" buttons for modals/overlays
             try {
@@ -192,9 +195,11 @@ class Scraper {
 
             await browser.navigate(page, url);
 
-            // Simulate human landing
             await Humanoid.bezierMove(page, Math.random() * 800 + 100, Math.random() * 600 + 100);
             await Humanoid.sleep(Math.random() * 1000 + 500);
+
+            // Universal Cookie & Consent Handler
+            await Scraper.handleCookieConsents(page);
 
             // Execute list of actions
             for (const action of interactions) {
@@ -204,17 +209,28 @@ class Scraper {
                 try {
                     switch (type) {
                         case 'click':
-                            await page.waitForSelector(selector, { timeout: 10000 });
-                            const rect = await page.$eval(selector, el => {
-                                const { x, y, width, height } = el.getBoundingClientRect();
-                                // Return absolute coordinates with scroll logic? 
-                                // Puppeteer handles this relative to viewport usually.
-                                return { x, y, width, height };
-                            });
-                            // Initial Human movement
-                            await Humanoid.bezierMove(page, rect.x + rect.width / 2, rect.y + rect.height / 2);
-                            await new Promise(r => setTimeout(r, 500));
-                            await page.click(selector); // Use standard click for selector safety
+                            try {
+                                const el = await page.waitForSelector(selector, { visible: true, timeout: 5000 });
+
+                                // 1. Attempt Human-like Click
+                                const rect = await page.$eval(selector, el => {
+                                    const { x, y, width, height } = el.getBoundingClientRect();
+                                    return { x, y, width, height };
+                                });
+
+                                if (rect.width > 0 && rect.height > 0) {
+                                    // Move mouse smoothly to target
+                                    await Humanoid.bezierMove(page, rect.x + rect.width / 2, rect.y + rect.height / 2);
+                                    await new Promise(r => setTimeout(r, 300)); /* Short pause for smoothness */
+                                    await page.click(selector);
+                                } else {
+                                    throw new Error("Element invisible or zero size");
+                                }
+                            } catch (clickErr) {
+                                logger.warn(`Standard click failed (${clickErr.message}), attempting Forced JS Click...`);
+                                // 2. Fallback: Forced JS Click (The "Accurate" Touch)
+                                await page.$eval(selector, el => el.click());
+                            }
                             break;
 
                         case 'click_coordinates':
@@ -231,7 +247,26 @@ class Scraper {
                             await Humanoid.humanType(page, selector, value || '');
                             break;
                         case 'scroll':
-                            await page.evaluate(() => window.scrollBy(0, 500));
+                            await page.evaluate(() => window.scrollBy(0, 800));
+                            break;
+                        case 'scroll_to':
+                            if (selector) {
+                                await page.waitForSelector(selector, { timeout: 10000 });
+                                await page.$eval(selector, el => el.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+                                await new Promise(r => setTimeout(r, 1000));
+                            }
+                            break;
+                        case 'hover':
+                            if (selector) {
+                                await page.waitForSelector(selector, { visible: true, timeout: 5000 });
+                                const hRect = await page.$eval(selector, el => {
+                                    const { x, y, width, height } = el.getBoundingClientRect();
+                                    return { x, y, width, height };
+                                });
+                                await Humanoid.bezierMove(page, hRect.x + hRect.width / 2, hRect.y + hRect.height / 2);
+                                await page.hover(selector);
+                                await new Promise(r => setTimeout(r, 1000)); // Wait for hover effect
+                            }
                             break;
                         case 'wait':
                             if (selector) {
@@ -264,6 +299,41 @@ class Scraper {
             logger.error(`ScrapeStore failed: ${error.message}`);
             await browser.close();
             return null;
+        }
+    }
+
+    static async handleCookieConsents(page) {
+        try {
+            logger.info("Scanning for cookie consents...");
+            const consentSelectors = [
+                'button:has-text("Accept")',
+                'button:has-text("Agree")',
+                'button:has-text("Allow all")',
+                'button:has-text("I agree")',
+                'button:has-text("Consent")',
+                'button:has-text("OK")',
+                '#L2AGLb', // Google Consent
+                '#consent-buttons button.accept-all',
+                'button[id*="consent"]',
+                'button[class*="consent"]'
+            ];
+
+            for (const selector of consentSelectors) {
+                try {
+                    const btn = await page.$(selector);
+                    if (btn) {
+                        const isVisible = await btn.boundingBox();
+                        if (isVisible) {
+                            logger.info(`✓ Clicking consent/cookie button: ${selector}`);
+                            await btn.click();
+                            await new Promise(r => setTimeout(r, 1000));
+                            return; // Usually one is enough
+                        }
+                    }
+                } catch (err) { /* ignore */ }
+            }
+        } catch (e) {
+            logger.warn("Cookie handling failed (non-critical).");
         }
     }
 }
